@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.0.0)
+project(hoehenmessung VERSION 0.1.0)
+
+include(CTest)
+enable_testing()
+
+find_package(PCL REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(realsense2 REQUIRED)
+
+include_directories(${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
+link_directories(${PCL_LIBRARY_DIRS})
+add_definitions(${PCL_DEFINITIONS})
+
+add_executable(hoehenmessung src/main.cpp)
+
+target_link_libraries(${PROJECT_NAME} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${realsense2_LIBRARY})
+
+set(CPACK_PROJECT_NAME ${PROJECT_NAME})
+set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
+include(CPack)
