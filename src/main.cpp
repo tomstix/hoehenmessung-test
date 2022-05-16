@@ -75,9 +75,35 @@ try
     const auto window_name = "Display Image";
     cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
 
+    const auto trackbar_window_name = "Settings";
+    cv::namedWindow(trackbar_window_name, cv::WINDOW_AUTOSIZE);
+
+    int min_distance = 20;
+    int min_distance_max = 1500;
+    cv::createTrackbar("min. Distance (cm)", trackbar_window_name, &min_distance, min_distance_max);
+
+    int max_distance = 1500;
+    int max_distance_max = 2500;
+    cv::createTrackbar("max. Distance (cm)", trackbar_window_name, &max_distance, max_distance_max);
+
+    int voxel_size = 1;
+    int voxel_size_max = 10;
+    cv::createTrackbar("Voxel Size (cm)", trackbar_window_name, &voxel_size, voxel_size_max);
+
+    int ransac_threshold = 1;
+    int ransac_threshold_max = 10;
+    cv::createTrackbar("RANSAC Threshold (cm)", trackbar_window_name, &ransac_threshold, ransac_threshold_max);
+
+    int ransac_iterations = 200;
+    int ransac_iterations_max = 2000;
+    cv::createTrackbar("RANSAC Iterations", trackbar_window_name, &ransac_iterations, ransac_iterations_max);
+
     // variables for exponential moving average
-    float alpha = 0.1;
-    float groundPlaneDistance = 0;
+    int ma_alpha_int = 10;
+    int ma_alpha_max = 100;
+    cv::createTrackbar("Alpha (Averaging)", trackbar_window_name, &ma_alpha_int, ma_alpha_max);
+    float ma_alpha = (float)ma_alpha_int / 100.0;
+    float groundPlaneDistance = 1.0;
 
     while (cv::waitKey(1) < 0 && cv::getWindowProperty(window_name, cv::WND_PROP_AUTOSIZE) >= 0)
     {
@@ -105,14 +131,15 @@ try
         pcl::PassThrough<pcl::PointXYZ> pass;
         pass.setInputCloud(pcl_points);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(1.5, 8.0);
+        pass.setFilterLimits((float)min_distance / 100.0, (float)max_distance / 100.0);
         pass.filter(*cloud_filtered);
 
         // downsample pointc cloud
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud <pcl::PointXYZ>);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::VoxelGrid<pcl::PointXYZ> downsample;
         downsample.setInputCloud(cloud_filtered);
-        downsample.setLeafSize(0.01f, 0.01f, 0.03f);
+        float voxel_size_f = (float)voxel_size / 100.0;
+        downsample.setLeafSize(voxel_size_f, voxel_size_f, voxel_size_f);
         downsample.filter(*cloud_filtered);
 
         // detect ground plane using ransac and perpendicular plane model
@@ -122,48 +149,51 @@ try
         std::vector<int> groundPlaneInliers;
         groundPlaneModel->setAxis(Eigen::Vector3f(0.0, -1.0, 0.0));
         groundPlaneModel->setEpsAngle(30.0 * M_PI / 180.0);
-        groundPlaneRansac.setDistanceThreshold(0.01);
-        groundPlaneRansac.setMaxIterations(500);
-        groundPlaneRansac.computeModel();
-        Eigen::VectorXf groundPlaneCoeffs;
-        groundPlaneRansac.getModelCoefficients(groundPlaneCoeffs);
-        float groundPlaneDistanceRaw = std::abs(groundPlaneCoeffs(3));
-        groundPlaneDistance = (alpha * groundPlaneDistanceRaw) + (1.0 - alpha) * groundPlaneDistance;
-        groundPlaneRansac.getInliers(groundPlaneInliers);
-        pcl::copyPointCloud(*cloud_filtered, groundPlaneInliers, *groundPlaneCloud);
-
-        // print Plane Distance to image
-        char distanceBuffer[10];
-        sprintf(distanceBuffer, "%.2f m ", groundPlaneDistance);
-        cv::putText(image_bgr, distanceBuffer, cv::Point(10, 50), cv::FONT_HERSHEY_DUPLEX, 1.0, CV_RGB(255, 0, 0), 2);
-
-        // turn ground plane pcl cloud into opencv points
-        std::vector<cv::Point3f> points_cv;
-#pragma omp parallel for
-        for (int i = 0; i < groundPlaneCloud->points.size(); i++)
+        groundPlaneRansac.setDistanceThreshold(float(ransac_threshold) / 100.0);
+        groundPlaneRansac.setMaxIterations(ransac_iterations);
+        bool success = groundPlaneRansac.computeModel();
+        if (success)
         {
-            points_cv.push_back(cv::Point3d(groundPlaneCloud->points[i].x, groundPlaneCloud->points[i].y, groundPlaneCloud->points[i].z));
-        }
+            Eigen::VectorXf groundPlaneCoeffs;
+            groundPlaneRansac.getModelCoefficients(groundPlaneCoeffs);
+            float groundPlaneDistanceRaw = std::abs(groundPlaneCoeffs(3));
+            groundPlaneDistance = (ma_alpha * groundPlaneDistanceRaw) + (1.0 - ma_alpha) * groundPlaneDistance;
+            groundPlaneRansac.getInliers(groundPlaneInliers);
+            pcl::copyPointCloud(*cloud_filtered, groundPlaneInliers, *groundPlaneCloud);
 
-        // project point cloud to camera plane
-        std::vector<cv::Point2f> projectedPoints;
-        cv::projectPoints(points_cv, rvec, tvec, intrisicMat, distortion, projectedPoints);
+            // print Plane Distance to image
+            char distanceBuffer[10];
+            sprintf(distanceBuffer, "%.2f m ", groundPlaneDistance);
+            cv::putText(image_bgr, distanceBuffer, cv::Point(10, 50), cv::FONT_HERSHEY_DUPLEX, 1.0, CV_RGB(255, 0, 0), 2);
 
-        // color points in image
-        cv::Vec3b color(0, 255, 0);
+            // turn ground plane pcl cloud into opencv points
+            std::vector<cv::Point3f> points_cv;
 #pragma omp parallel for
-        for (unsigned int i = 0; i < projectedPoints.size(); i++)
-        {
-            auto pt = projectedPoints[i];
-            unsigned int ix(std::round(pt.x)), iy(std::round(pt.y));
-            image_bgr.at<cv::Vec3b>(iy, ix) = color;
+            for (int i = 0; i < groundPlaneCloud->points.size(); i++)
+            {
+                points_cv.push_back(cv::Point3d(groundPlaneCloud->points[i].x, groundPlaneCloud->points[i].y, groundPlaneCloud->points[i].z));
+            }
+
+            // project point cloud to camera plane
+            std::vector<cv::Point2f> projectedPoints;
+            cv::projectPoints(points_cv, rvec, tvec, intrisicMat, distortion, projectedPoints);
+
+            // color points in image
+            cv::Vec3b color(0, 255, 0);
+#pragma omp parallel for
+            for (unsigned int i = 0; i < projectedPoints.size(); i++)
+            {
+                auto pt = projectedPoints[i];
+                unsigned int ix(std::round(pt.x)), iy(std::round(pt.y));
+                image_bgr.at<cv::Vec3b>(iy, ix) = color;
+            }
         }
 
         auto t2 = std::chrono::high_resolution_clock::now();
         auto ms_int = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1);
 
         cv::putText(image_bgr, std::to_string(ms_int.count()), cv::Point(10, 100), cv::FONT_HERSHEY_DUPLEX, 1.0, CV_RGB(255, 0, 0), 2);
-
+        std::cout << ms_int.count() << std::endl;
         // Update the window with new data
         imshow(window_name, image_bgr);
     }
