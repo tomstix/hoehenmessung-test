@@ -151,6 +151,7 @@ try
         groundPlaneModel->setEpsAngle(30.0 * M_PI / 180.0);
         groundPlaneRansac.setDistanceThreshold(float(ransac_threshold) / 100.0);
         groundPlaneRansac.setMaxIterations(ransac_iterations);
+        groundPlaneRansac.setNumberOfThreads(4);
         bool success = groundPlaneRansac.computeModel();
         if (success)
         {
@@ -168,7 +169,6 @@ try
 
             // turn ground plane pcl cloud into opencv points
             std::vector<cv::Point3f> points_cv;
-#pragma omp parallel for
             for (int i = 0; i < groundPlaneCloud->points.size(); i++)
             {
                 points_cv.push_back(cv::Point3d(groundPlaneCloud->points[i].x, groundPlaneCloud->points[i].y, groundPlaneCloud->points[i].z));
@@ -180,7 +180,6 @@ try
 
             // color points in image
             cv::Vec3b color(0, 255, 0);
-#pragma omp parallel for
             for (unsigned int i = 0; i < projectedPoints.size(); i++)
             {
                 auto pt = projectedPoints[i];
@@ -193,8 +192,8 @@ try
         auto ms_int = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1);
 
         cv::putText(image_bgr, std::to_string(ms_int.count()), cv::Point(10, 100), cv::FONT_HERSHEY_DUPLEX, 1.0, CV_RGB(255, 0, 0), 2);
-        std::cout << ms_int.count() << std::endl;
-        // Update the window with new data
+        // std::cout << ms_int.count() << std::endl;
+        //  Update the window with new data
         imshow(window_name, image_bgr);
     }
 
