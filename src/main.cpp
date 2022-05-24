@@ -1,9 +1,4 @@
 #include <iostream>
-#include <thread>
-#include <string>
-#include <iterator>
-#include <exception>
-#include <omp.h>
 
 #include <librealsense2/rs.hpp>
 
@@ -15,93 +10,22 @@
 
 #include <opencv2/opencv.hpp>
 
-#include <boost/program_options.hpp>
-namespace po = boost::program_options;
-
-pcl::PointCloud<pcl::PointXYZ>::Ptr rs2_points_to_pcl(const rs2::points &points)
-{
-    // Function to turn uncoloured rs2 point cloud to pcl point cloud
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-
-    auto sp = points.get_profile().as<rs2::video_stream_profile>();
-    cloud->width = sp.width();
-    cloud->height = sp.height();
-    cloud->is_dense = false;
-    cloud->points.resize(points.size());
-    auto ptr = points.get_vertices();
-    //#pragma omp parallel for
-    for (auto &p : cloud->points)
-    {
-        p.x = ptr->x;
-        p.y = ptr->y;
-        p.z = ptr->z;
-        ptr++;
-    }
-
-    return cloud;
-}
+#include "realsense_tools.h"
 
 int main(int argc, char **argv)
 try
 {
-    rs2::config cfg;
-    bool usebag = false;
+    RealsensePCLProvider rs (1280, 720, 1280, 720, 30);
 
-    po::options_description desc{"Options"};
-    desc.add_options()("help,h", "Help screen")("file,f", po::value<std::string>(), "BAG File to read from");
-    po::variables_map vm;
-    po::store(parse_command_line(argc, argv, desc), vm);
-    po::notify(vm);
-
-    if (vm.count("help"))
-    {
-        std::cout << desc << '\n';
-        return EXIT_SUCCESS;
-    }
-    if (vm.count("file"))
-    {
-        using namespace std;
-        auto filename = vm["file"].as<string>();
-        cfg.enable_device_from_file(filename, true);
-        usebag = true;
-    }
-    else
-    {
-        // configure realsense camera
-        cfg.enable_stream(RS2_STREAM_COLOR, 1280, 720, RS2_FORMAT_YUYV, 30);
-        cfg.enable_stream(RS2_STREAM_DEPTH, 1280, 720, RS2_FORMAT_Z16, 30);
-    }
-
-    // create rs2 point cloud
-    rs2::pointcloud pc;
-    rs2::points points;
-
-    // Declare RealSense pipeline, encapsulating the actual device and sensors
-    rs2::pipeline pipe;
-    // Start streaming with high accuracy configuration
-    rs2::pipeline_profile profile = pipe.start(cfg);
-    if (!usebag)
-    {
-        auto sensor = profile.get_device().first<rs2::depth_sensor>();
-        sensor.set_option(RS2_OPTION_VISUAL_PRESET, RS2_RS400_VISUAL_PRESET_HIGH_ACCURACY);
-    }
-
-    auto depth_stream = profile.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
-    auto intrinsics = depth_stream.get_intrinsics();
-
-    // camera data for projectPoints
-    std::vector<float> rvec = {0.0, 0.0, 0.0};             // Rotation Vector
-    std::vector<float> tvec = {0.0, 0.0, 0.0};             // Translation Vector
-    std::vector<float> distortion;                         // no distortion
     cv::Mat intrisicMat(3, 3, cv::DataType<double>::type); // Intrisic matrix
-    intrisicMat.at<double>(0, 0) = intrinsics.fx;
+    intrisicMat.at<double>(0, 0) = rs.get_intrinsic_matrix().at(0).at(0);
     intrisicMat.at<double>(1, 0) = 0;
     intrisicMat.at<double>(2, 0) = 0;
     intrisicMat.at<double>(0, 1) = 0;
-    intrisicMat.at<double>(1, 1) = intrinsics.fy;
+    intrisicMat.at<double>(1, 1) = rs.get_intrinsic_matrix().at(1).at(1);
     intrisicMat.at<double>(2, 1) = 0;
-    intrisicMat.at<double>(0, 2) = intrinsics.ppx;
-    intrisicMat.at<double>(1, 2) = intrinsics.ppy;
+    intrisicMat.at<double>(0, 2) = rs.get_intrinsic_matrix().at(0).at(2);
+    intrisicMat.at<double>(1, 2) = rs.get_intrinsic_matrix().at(1).at(2);
     intrisicMat.at<double>(2, 2) = 1;
 
     // create OpenCV window
@@ -113,11 +37,15 @@ try
 
     int min_distance = 20;
     int min_distance_max = 1500;
-    cv::createTrackbar("min. Distance (cm)", trackbar_window_name, &min_distance, min_distance_max);
+    cv::createTrackbar("min. Z Distance (cm)", trackbar_window_name, &min_distance, min_distance_max);
 
     int max_distance = 1500;
     int max_distance_max = 2500;
-    cv::createTrackbar("max. Distance (cm)", trackbar_window_name, &max_distance, max_distance_max);
+    cv::createTrackbar("max. Z Distance (cm)", trackbar_window_name, &max_distance, max_distance_max);
+
+    int x_width = 760;
+    int x_width_max = 2000;
+    cv::createTrackbar("X Width", trackbar_window_name, &x_width, x_width_max);
 
     int voxel_size = 1;
     int voxel_size_max = 10;
@@ -142,22 +70,13 @@ try
     {
         auto t1 = std::chrono::high_resolution_clock::now();
         // wait for and get frames from Camera
-        rs2::frameset data = pipe.wait_for_frames();
-        rs2::frame depth = data.get_depth_frame();
-        rs2::frame yuyv = data.get_color_frame();
-
-        // Query frame size (width and height)
-        const int w = yuyv.as<rs2::video_frame>().get_width();
-        const int h = yuyv.as<rs2::video_frame>().get_height();
+        auto pcl_points = rs.get_pcl_point_cloud();
+        auto yuyv = rs.get_color_frame();
 
         // Create OpenCV matrix of size (w,h) from the color image
-        cv::Mat image_yuyv(cv::Size(w, h), CV_8UC2, (void *)yuyv.get_data(), cv::Mat::AUTO_STEP);
-        cv::Mat image_bgr(cv::Size(w, h), CV_8UC3);
+        cv::Mat image_yuyv(cv::Size(rs.color_width, rs.color_height), CV_8UC2, (void *)yuyv->get_data(), cv::Mat::AUTO_STEP);
+        cv::Mat image_bgr(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
         cv::cvtColor(image_yuyv, image_bgr, cv::COLOR_YUV2BGR_YUYV);
-
-        // turn depth image to rs2 and pcl point cloud
-        points = pc.calculate(depth);
-        auto pcl_points = rs2_points_to_pcl(points);
 
         // filter point cloud by z distance
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
@@ -172,6 +91,13 @@ try
         pass.setInputCloud(cloud_filtered);
         pass.setFilterFieldName("y");
         pass.setFilterLimits(0.5, 4.0);
+        pass.filter(*cloud_filtered);
+
+        // filter point cloud by x distance
+        pcl::PassThrough<pcl::PointXYZ> passx;
+        pass.setInputCloud(cloud_filtered);
+        pass.setFilterFieldName("x");
+        pass.setFilterLimits(-(float)x_width / 200.0, (float)x_width / 200.0);
         pass.filter(*cloud_filtered);
 
         // downsample point cloud
@@ -216,11 +142,10 @@ try
 
             // project point cloud to camera plane
             std::vector<cv::Point2f> projectedPoints;
-            cv::projectPoints(points_cv, rvec, tvec, intrisicMat, distortion, projectedPoints);
+            cv::projectPoints(points_cv, rs.rvec, rs.tvec, intrisicMat, rs.distortion, projectedPoints);
 
             // color points in image
             cv::Vec3b color(0, 255, 0);
-            //#pragma omp parallel for
             for (unsigned int i = 0; i < projectedPoints.size(); i++)
             {
                 auto pt = projectedPoints[i];
