@@ -1,6 +1,9 @@
 #include <iostream>
 #include <thread>
-#include <chrono>
+#include <string>
+#include <iterator>
+#include <exception>
+#include <omp.h>
 
 #include <librealsense2/rs.hpp>
 
@@ -11,6 +14,9 @@
 #include <pcl/filters/voxel_grid.h>
 
 #include <opencv2/opencv.hpp>
+
+#include <boost/program_options.hpp>
+namespace po = boost::program_options;
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr rs2_points_to_pcl(const rs2::points &points)
 {
@@ -23,6 +29,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr rs2_points_to_pcl(const rs2::points &points)
     cloud->is_dense = false;
     cloud->points.resize(points.size());
     auto ptr = points.get_vertices();
+    //#pragma omp parallel for
     for (auto &p : cloud->points)
     {
         p.x = ptr->x;
@@ -34,13 +41,36 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr rs2_points_to_pcl(const rs2::points &points)
     return cloud;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, char **argv)
 try
 {
-    // configure realsense camera
     rs2::config cfg;
-    cfg.enable_stream(RS2_STREAM_COLOR, 1280, 720, RS2_FORMAT_YUYV, 30);
-    cfg.enable_stream(RS2_STREAM_DEPTH, 1280, 720, RS2_FORMAT_Z16, 30);
+    bool usebag = false;
+
+    po::options_description desc{"Options"};
+    desc.add_options()("help,h", "Help screen")("file,f", po::value<std::string>(), "BAG File to read from");
+    po::variables_map vm;
+    po::store(parse_command_line(argc, argv, desc), vm);
+    po::notify(vm);
+
+    if (vm.count("help"))
+    {
+        std::cout << desc << '\n';
+        return EXIT_SUCCESS;
+    }
+    if (vm.count("file"))
+    {
+        using namespace std;
+        auto filename = vm["file"].as<string>();
+        cfg.enable_device_from_file(filename, true);
+        usebag = true;
+    }
+    else
+    {
+        // configure realsense camera
+        cfg.enable_stream(RS2_STREAM_COLOR, 1280, 720, RS2_FORMAT_YUYV, 30);
+        cfg.enable_stream(RS2_STREAM_DEPTH, 1280, 720, RS2_FORMAT_Z16, 30);
+    }
 
     // create rs2 point cloud
     rs2::pointcloud pc;
@@ -50,8 +80,11 @@ try
     rs2::pipeline pipe;
     // Start streaming with high accuracy configuration
     rs2::pipeline_profile profile = pipe.start(cfg);
-    auto sensor = profile.get_device().first<rs2::depth_sensor>();
-    sensor.set_option(RS2_OPTION_VISUAL_PRESET, RS2_RS400_VISUAL_PRESET_HIGH_ACCURACY);
+    if (!usebag)
+    {
+        auto sensor = profile.get_device().first<rs2::depth_sensor>();
+        sensor.set_option(RS2_OPTION_VISUAL_PRESET, RS2_RS400_VISUAL_PRESET_HIGH_ACCURACY);
+    }
 
     auto depth_stream = profile.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
     auto intrinsics = depth_stream.get_intrinsics();
@@ -134,7 +167,14 @@ try
         pass.setFilterLimits((float)min_distance / 100.0, (float)max_distance / 100.0);
         pass.filter(*cloud_filtered);
 
-        // downsample pointc cloud
+        // filter point cloud by y distance
+        pcl::PassThrough<pcl::PointXYZ> passy;
+        pass.setInputCloud(cloud_filtered);
+        pass.setFilterFieldName("y");
+        pass.setFilterLimits(0.5, 4.0);
+        pass.filter(*cloud_filtered);
+
+        // downsample point cloud
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::VoxelGrid<pcl::PointXYZ> downsample;
         downsample.setInputCloud(cloud_filtered);
@@ -180,6 +220,7 @@ try
 
             // color points in image
             cv::Vec3b color(0, 255, 0);
+            //#pragma omp parallel for
             for (unsigned int i = 0; i < projectedPoints.size(); i++)
             {
                 auto pt = projectedPoints[i];
@@ -192,7 +233,7 @@ try
         auto ms_int = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1);
 
         cv::putText(image_bgr, std::to_string(ms_int.count()), cv::Point(10, 100), cv::FONT_HERSHEY_DUPLEX, 1.0, CV_RGB(255, 0, 0), 2);
-        // std::cout << ms_int.count() << std::endl;
+
         //  Update the window with new data
         imshow(window_name, image_bgr);
     }
