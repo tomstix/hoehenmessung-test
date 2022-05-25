@@ -17,16 +17,16 @@ try
 {
     RealsensePCLProvider rs (1280, 720, 1280, 720, 30);
 
-    cv::Mat intrisicMat(3, 3, cv::DataType<double>::type); // Intrisic matrix
-    intrisicMat.at<double>(0, 0) = rs.get_intrinsic_matrix().at(0).at(0);
-    intrisicMat.at<double>(1, 0) = 0;
-    intrisicMat.at<double>(2, 0) = 0;
-    intrisicMat.at<double>(0, 1) = 0;
-    intrisicMat.at<double>(1, 1) = rs.get_intrinsic_matrix().at(1).at(1);
-    intrisicMat.at<double>(2, 1) = 0;
-    intrisicMat.at<double>(0, 2) = rs.get_intrinsic_matrix().at(0).at(2);
-    intrisicMat.at<double>(1, 2) = rs.get_intrinsic_matrix().at(1).at(2);
-    intrisicMat.at<double>(2, 2) = 1;
+    cv::Mat intrinsicMat(3, 3, cv::DataType<double>::type); // Intrisic matrix
+    intrinsicMat.at<double>(0, 0) = rs.get_intrinsic_matrix()->at(0).at(0);
+    intrinsicMat.at<double>(1, 0) = 0;
+    intrinsicMat.at<double>(2, 0) = 0;
+    intrinsicMat.at<double>(0, 1) = 0;
+    intrinsicMat.at<double>(1, 1) = rs.get_intrinsic_matrix()->at(1).at(1);
+    intrinsicMat.at<double>(2, 1) = 0;
+    intrinsicMat.at<double>(0, 2) = rs.get_intrinsic_matrix()->at(0).at(2);
+    intrinsicMat.at<double>(1, 2) = rs.get_intrinsic_matrix()->at(1).at(2);
+    intrinsicMat.at<double>(2, 2) = 1;
 
     // create OpenCV window
     const auto window_name = "Display Image";
@@ -63,7 +63,7 @@ try
     int ma_alpha_int = 10;
     int ma_alpha_max = 100;
     cv::createTrackbar("Alpha (Averaging)", trackbar_window_name, &ma_alpha_int, ma_alpha_max);
-    float ma_alpha = (float)ma_alpha_int / 100.0;
+    float ma_alpha = (float)ma_alpha_int / 100.0F;
     float groundPlaneDistance = 1.0;
 
     while (cv::waitKey(1) < 0 && cv::getWindowProperty(window_name, cv::WND_PROP_AUTOSIZE) >= 0)
@@ -74,7 +74,7 @@ try
         auto yuyv = rs.get_color_frame();
 
         // Create OpenCV matrix of size (w,h) from the color image
-        cv::Mat image_yuyv(cv::Size(rs.color_width, rs.color_height), CV_8UC2, (void *)yuyv->get_data(), cv::Mat::AUTO_STEP);
+        cv::Mat image_yuyv(cv::Size(rs.color_width, rs.color_height), CV_8UC2,(void*)yuyv->get_data(), cv::Mat::AUTO_STEP);
         cv::Mat image_bgr(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
         cv::cvtColor(image_yuyv, image_bgr, cv::COLOR_YUV2BGR_YUYV);
 
@@ -83,7 +83,7 @@ try
         pcl::PassThrough<pcl::PointXYZ> pass;
         pass.setInputCloud(pcl_points);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits((float)min_distance / 100.0, (float)max_distance / 100.0);
+        pass.setFilterLimits((float)min_distance / 100.0F, (float)max_distance / 100.0F);
         pass.filter(*cloud_filtered);
 
         // filter point cloud by y distance
@@ -97,14 +97,14 @@ try
         pcl::PassThrough<pcl::PointXYZ> passx;
         pass.setInputCloud(cloud_filtered);
         pass.setFilterFieldName("x");
-        pass.setFilterLimits(-(float)x_width / 200.0, (float)x_width / 200.0);
+        pass.setFilterLimits(-(float)x_width / 200.0F, (float)x_width / 200.0F);
         pass.filter(*cloud_filtered);
 
         // downsample point cloud
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::VoxelGrid<pcl::PointXYZ> downsample;
         downsample.setInputCloud(cloud_filtered);
-        float voxel_size_f = (float)voxel_size / 100.0;
+        float voxel_size_f = (float)voxel_size / 100.0F;
         downsample.setLeafSize(voxel_size_f, voxel_size_f, voxel_size_f);
         downsample.filter(*cloud_filtered);
 
@@ -124,14 +124,14 @@ try
             Eigen::VectorXf groundPlaneCoeffs;
             groundPlaneRansac.getModelCoefficients(groundPlaneCoeffs);
             float groundPlaneDistanceRaw = std::abs(groundPlaneCoeffs(3));
-            groundPlaneDistance = (ma_alpha * groundPlaneDistanceRaw) + (1.0 - ma_alpha) * groundPlaneDistance;
+            groundPlaneDistance = (ma_alpha * groundPlaneDistanceRaw) + (1.0F - ma_alpha) * groundPlaneDistance;
             groundPlaneRansac.getInliers(groundPlaneInliers);
             pcl::copyPointCloud(*cloud_filtered, groundPlaneInliers, *groundPlaneCloud);
 
             // print Plane Distance to image
-            char distanceBuffer[10];
-            sprintf(distanceBuffer, "%.2f m ", groundPlaneDistance);
-            cv::putText(image_bgr, distanceBuffer, cv::Point(10, 50), cv::FONT_HERSHEY_DUPLEX, 1.0, CV_RGB(255, 0, 0), 2);
+            std::stringstream distanceBuffer;
+            distanceBuffer << std::fixed << std::setprecision(2) << groundPlaneDistance;
+            cv::putText(image_bgr, distanceBuffer.str(), cv::Point(10, 50), cv::FONT_HERSHEY_DUPLEX, 1.0, CV_RGB(255, 0, 0), 2);
 
             // turn ground plane pcl cloud into opencv points
             std::vector<cv::Point3f> points_cv;
@@ -142,14 +142,14 @@ try
 
             // project point cloud to camera plane
             std::vector<cv::Point2f> projectedPoints;
-            cv::projectPoints(points_cv, rs.rvec, rs.tvec, intrisicMat, rs.distortion, projectedPoints);
+            cv::projectPoints(points_cv, rs.rvec, rs.tvec, intrinsicMat, rs.distortion, projectedPoints);
 
             // color points in image
             cv::Vec3b color(0, 255, 0);
             for (unsigned int i = 0; i < projectedPoints.size(); i++)
             {
                 auto pt = projectedPoints[i];
-                unsigned int ix(std::round(pt.x)), iy(std::round(pt.y));
+                unsigned int ix((unsigned int)std::round(pt.x)), iy((unsigned int)std::round(pt.y));
                 image_bgr.at<cv::Vec3b>(iy, ix) = color;
             }
         }
