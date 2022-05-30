@@ -7,6 +7,7 @@
 #include <pcl/sample_consensus/ransac.h>
 #include <pcl/sample_consensus/sac_model_perpendicular_plane.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/io/real_sense_2_grabber.h>
 
 #include <opencv2/opencv.hpp>
 
@@ -64,7 +65,7 @@ try
     int ma_alpha_max = 100;
     cv::createTrackbar("Alpha (Averaging)", trackbar_window_name, &ma_alpha_int, ma_alpha_max);
     float ma_alpha = (float)ma_alpha_int / 100.0F;
-    float groundPlaneDistance = 1.0;
+    float groundPlaneDistance = 1.0F;
 
     while (cv::waitKey(1) < 0 && cv::getWindowProperty(window_name, cv::WND_PROP_AUTOSIZE) >= 0)
     {
@@ -117,13 +118,18 @@ try
         groundPlaneModel->setEpsAngle(30.0 * M_PI / 180.0);
         groundPlaneRansac.setDistanceThreshold(float(ransac_threshold) / 100.0);
         groundPlaneRansac.setMaxIterations(ransac_iterations);
-        groundPlaneRansac.setNumberOfThreads(4);
+        groundPlaneRansac.setNumberOfThreads(0);
         bool success = groundPlaneRansac.computeModel();
         if (success)
         {
             Eigen::VectorXf groundPlaneCoeffs;
             groundPlaneRansac.getModelCoefficients(groundPlaneCoeffs);
-            float groundPlaneDistanceRaw = std::abs(groundPlaneCoeffs(3));
+            if ( groundPlaneCoeffs.w() < 0 )
+            {
+                groundPlaneCoeffs = -groundPlaneCoeffs;
+            }
+            rs.calculate_extrinsic_matrix(groundPlaneCoeffs);
+            float groundPlaneDistanceRaw = groundPlaneCoeffs.w();
             groundPlaneDistance = (ma_alpha * groundPlaneDistanceRaw) + (1.0F - ma_alpha) * groundPlaneDistance;
             groundPlaneRansac.getInliers(groundPlaneInliers);
             pcl::copyPointCloud(*cloud_filtered, groundPlaneInliers, *groundPlaneCloud);

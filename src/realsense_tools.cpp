@@ -4,6 +4,7 @@
 #include <librealsense2/rs.hpp>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
+#include <Eigen/Core>
 
 #include "realsense_tools.h"
 
@@ -51,14 +52,29 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RealsensePCLProvider::get_pcl_point_cloud(un
     return cloud;
 }
 
-boost::shared_ptr<rs2::frame> RealsensePCLProvider::get_color_frame()
+std::unique_ptr<rs2::frame> RealsensePCLProvider::get_color_frame() const
 {
-    auto frame_ptr = boost::make_shared<rs2::frame>(color_frame);
+    auto frame_ptr = std::make_unique<rs2::frame>(color_frame);
     return frame_ptr;
 }
 
-boost::shared_ptr<std::vector<std::vector<double>>> RealsensePCLProvider::get_intrinsic_matrix()
+std::unique_ptr<std::vector<std::vector<double>>> RealsensePCLProvider::get_intrinsic_matrix() const
 {
-    auto mat_ptr = boost::make_shared<std::vector<std::vector<double>>>(intrinsic_matrix);
+    auto mat_ptr = std::make_unique<std::vector<std::vector<double>>>(intrinsic_matrix);
+    return mat_ptr;
+}
+
+void RealsensePCLProvider::calculate_extrinsic_matrix(const Eigen::VectorXf &planeCoeffs)
+{
+    Eigen::Vector3f y_vector = {0.0, -1.0, 0.0};
+    Eigen::Vector3f rot_vector = y_vector.cross(planeCoeffs.head<3>());
+    std::cout << rot_vector << std::endl;
+    Eigen::Matrix4f mat;
+    extrinsic_matrix = mat;
+}
+
+std::unique_ptr<Eigen::Matrix4f> RealsensePCLProvider::get_extrinsic_matrix() const
+{
+    auto mat_ptr = std::make_unique<Eigen::Matrix4f>(extrinsic_matrix);
     return mat_ptr;
 }

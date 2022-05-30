@@ -8,8 +8,12 @@ public:
                             rs2_rs400_visual_preset visual_preset = RS2_RS400_VISUAL_PRESET_HIGH_ACCURACY);
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr get_pcl_point_cloud(unsigned int wait = 15000U);
-    boost::shared_ptr<rs2::frame> get_color_frame();
-    boost::shared_ptr<std::vector<std::vector<double>>> get_intrinsic_matrix();
+    std::unique_ptr<rs2::frame> get_color_frame() const;
+    std::unique_ptr<std::vector<std::vector<double>>> get_intrinsic_matrix() const;
+
+    void calculate_extrinsic_matrix(const Eigen::VectorXf &planeCoeffs);
+    std::unique_ptr<Eigen::Matrix4f> get_extrinsic_matrix() const;
+
     const int color_width;
     const int color_height;
     const std::vector<float> rvec = {0.0, 0.0, 0.0};
@@ -26,4 +30,5 @@ private:
     rs2::frame depth_frame;
     rs2::frame color_frame;
     std::vector<std::vector<double>> intrinsic_matrix;
+    Eigen::Matrix4f extrinsic_matrix;
 };
