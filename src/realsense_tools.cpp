@@ -5,6 +5,7 @@
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 
 #include "realsense_tools.h"
 
@@ -40,17 +41,22 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RealsensePCLProvider::get_pcl_point_cloud(un
     cloud->height = sp.height();
     cloud->is_dense = false;
     cloud->points.resize(points.size());
-    auto ptr = points.get_vertices();
-    for (auto &p : cloud->points)
+    const auto cloud_vertices_ptr = points.get_vertices ();
+#pragma omp parallel for \
+  default(none) \
+  shared(cloud, cloud_vertices_ptr)
+    for (std::size_t index = 0; index < cloud->size (); ++index)
     {
-        p.x = ptr->x;
-        p.y = ptr->y;
-        p.z = ptr->z;
-        ptr++;
+      const auto ptr = cloud_vertices_ptr + index;
+      auto& p = (*cloud)[index];
+
+      p.x = ptr->x;
+      p.y = ptr->y;
+      p.z = ptr->z;
     }
 
     return cloud;
-}
+  }
 
 std::unique_ptr<rs2::frame> RealsensePCLProvider::get_color_frame() const
 {
@@ -66,10 +72,27 @@ std::unique_ptr<std::vector<std::vector<double>>> RealsensePCLProvider::get_intr
 
 void RealsensePCLProvider::calculate_extrinsic_matrix(const Eigen::VectorXf &planeCoeffs)
 {
-    Eigen::Vector3f y_vector = {0.0, -1.0, 0.0};
-    Eigen::Vector3f rot_vector = y_vector.cross(planeCoeffs.head<3>());
-    std::cout << rot_vector << std::endl;
-    Eigen::Matrix4f mat;
+    using namespace std;
+    using namespace Eigen;
+
+    Vector3f plane_vec = planeCoeffs.head<3>();
+    Vector3f y_vector = {0.0, -1.0, 0.0};
+    Vector3f rot_vector = y_vector.cross(plane_vec);
+    rot_vector.normalize();
+    float dist = planeCoeffs.w();
+    float angle_cos = y_vector.dot(plane_vec);
+    float angle = acos(angle_cos);
+
+    Matrix3f rot_matrix;
+    rot_matrix = AngleAxisf(angle, rot_vector);
+
+    Vector3f trans_vector = {0.0, dist, 0.0};
+
+    Matrix4f mat;
+    mat.setIdentity();
+    mat.block<3,3>(0,0) = rot_matrix;
+    mat.block<3,1>(0,3) = trans_vector;
+
     extrinsic_matrix = mat;
 }
 
