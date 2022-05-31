@@ -10,6 +10,7 @@
 #include <pcl/io/real_sense_2_grabber.h>
 
 #include <opencv2/opencv.hpp>
+#include <opencv2/highgui.hpp>
 
 #include "realsense_tools.h"
 
@@ -33,39 +34,43 @@ try
     const auto window_name = "Display Image";
     cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
 
-    const auto trackbar_window_name = "Settings";
-    cv::namedWindow(trackbar_window_name, cv::WINDOW_AUTOSIZE);
-
     int min_distance = 20;
     int min_distance_max = 1500;
-    cv::createTrackbar("min. Z Distance (cm)", trackbar_window_name, &min_distance, min_distance_max);
+    cv::createTrackbar("min. Z Distance (cm)", window_name, &min_distance, min_distance_max);
 
     int max_distance = 1500;
     int max_distance_max = 2500;
-    cv::createTrackbar("max. Z Distance (cm)", trackbar_window_name, &max_distance, max_distance_max);
+    cv::createTrackbar("max. Z Distance (cm)", window_name, &max_distance, max_distance_max);
 
     int x_width = 760;
     int x_width_max = 2000;
-    cv::createTrackbar("X Width", trackbar_window_name, &x_width, x_width_max);
+    cv::createTrackbar("X Width", window_name, &x_width, x_width_max);
 
     int voxel_size = 1;
     int voxel_size_max = 10;
-    cv::createTrackbar("Voxel Size (cm)", trackbar_window_name, &voxel_size, voxel_size_max);
+    cv::createTrackbar("Voxel Size (cm)", window_name, &voxel_size, voxel_size_max);
 
     int ransac_threshold = 1;
     int ransac_threshold_max = 10;
-    cv::createTrackbar("RANSAC Threshold (cm)", trackbar_window_name, &ransac_threshold, ransac_threshold_max);
+    cv::createTrackbar("RANSAC Threshold (cm)", window_name, &ransac_threshold, ransac_threshold_max);
+
+    int angle_threshold = 30;
+    int angle_threshold_max = 180;
+    cv::createTrackbar("RANSAC angle Threshold (Deg)", window_name, &angle_threshold, angle_threshold_max);
 
     int ransac_iterations = 200;
     int ransac_iterations_max = 2000;
-    cv::createTrackbar("RANSAC Iterations", trackbar_window_name, &ransac_iterations, ransac_iterations_max);
+    cv::createTrackbar("RANSAC Iterations", window_name, &ransac_iterations, ransac_iterations_max);
 
     // variables for exponential moving average
     int ma_alpha_int = 10;
     int ma_alpha_max = 100;
-    cv::createTrackbar("Alpha (Averaging)", trackbar_window_name, &ma_alpha_int, ma_alpha_max);
-    float ma_alpha = (float)ma_alpha_int / 100.0F;
+    cv::createTrackbar("Alpha (Averaging)", window_name, &ma_alpha_int, ma_alpha_max);
     float groundPlaneDistance = 1.0F;
+    Eigen::Vector4f groundPlaneCoefficients = {0.0,0.0,0.0,0.0};
+
+    cv::createButton("Tare", nullptr);
+
 
     while (cv::waitKey(1) < 0 && cv::getWindowProperty(window_name, cv::WND_PROP_AUTOSIZE) >= 0)
     {
@@ -115,22 +120,25 @@ try
         pcl::PointCloud<pcl::PointXYZ>::Ptr groundPlaneCloud(new pcl::PointCloud<pcl::PointXYZ>);
         std::vector<int> groundPlaneInliers;
         groundPlaneModel->setAxis(Eigen::Vector3f(0.0, -1.0, 0.0));
-        groundPlaneModel->setEpsAngle(30.0 * M_PI / 180.0);
+        groundPlaneModel->setEpsAngle((float)angle_threshold * M_PI / 180.0);
         groundPlaneRansac.setDistanceThreshold(float(ransac_threshold) / 100.0);
         groundPlaneRansac.setMaxIterations(ransac_iterations);
         groundPlaneRansac.setNumberOfThreads(0);
         bool success = groundPlaneRansac.computeModel();
         if (success)
         {
-            Eigen::VectorXf groundPlaneCoeffs;
-            groundPlaneRansac.getModelCoefficients(groundPlaneCoeffs);
-            if ( groundPlaneCoeffs.w() < 0 )
+            Eigen::VectorXf groundPlaneCoeffsRaw;
+            groundPlaneRansac.getModelCoefficients(groundPlaneCoeffsRaw);
+            if ( groundPlaneCoeffsRaw.w() < 0 )
             {
-                groundPlaneCoeffs = -groundPlaneCoeffs;
+                groundPlaneCoeffsRaw = -groundPlaneCoeffsRaw;
             }
-            rs.calculate_extrinsic_matrix(groundPlaneCoeffs);
-            float groundPlaneDistanceRaw = groundPlaneCoeffs.w();
-            groundPlaneDistance = (ma_alpha * groundPlaneDistanceRaw) + (1.0F - ma_alpha) * groundPlaneDistance;
+            float ma_alpha = (float)ma_alpha_int / 100.0F;
+            Eigen::Vector4f s1 = groundPlaneCoeffsRaw.head<4>() * ma_alpha;
+            Eigen::Vector4f s2 = groundPlaneCoefficients * (1.0F-ma_alpha);
+            groundPlaneCoefficients = s1 + s2;
+            groundPlaneDistance = groundPlaneCoefficients.w();
+
             groundPlaneRansac.getInliers(groundPlaneInliers);
             pcl::copyPointCloud(*cloud_filtered, groundPlaneInliers, *groundPlaneCloud);
 
@@ -141,9 +149,9 @@ try
 
             // turn ground plane pcl cloud into opencv points
             std::vector<cv::Point3f> points_cv;
-            for (int i = 0; i < groundPlaneCloud->points.size(); i++)
+            for (auto point : groundPlaneCloud->points)
             {
-                points_cv.push_back(cv::Point3d(groundPlaneCloud->points[i].x, groundPlaneCloud->points[i].y, groundPlaneCloud->points[i].z));
+                points_cv.push_back(cv::Point3d(point.x, point.y, point.z));
             }
 
             // project point cloud to camera plane
@@ -152,10 +160,10 @@ try
 
             // color points in image
             cv::Vec3b color(0, 255, 0);
-            for (unsigned int i = 0; i < projectedPoints.size(); i++)
+            for ( auto point : projectedPoints) 
             {
-                auto pt = projectedPoints[i];
-                unsigned int ix((unsigned int)std::round(pt.x)), iy((unsigned int)std::round(pt.y));
+                auto ix((unsigned int)std::round(point.x));
+                auto iy((unsigned int)std::round(point.y));
                 image_bgr.at<cv::Vec3b>(iy, ix) = color;
             }
         }
@@ -168,6 +176,8 @@ try
         //  Update the window with new data
         imshow(window_name, image_bgr);
     }
+
+    cv::destroyAllWindows();
 
     return EXIT_SUCCESS;
 }
