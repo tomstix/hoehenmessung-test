@@ -1,4 +1,5 @@
 #include <iostream>
+#include <omp.h>
 
 #include <librealsense2/rs.hpp>
 
@@ -17,7 +18,7 @@
 int main(int argc, char **argv)
 try
 {
-    RealsensePCLProvider rs (1280, 720, 1280, 720, 30);
+    RealsensePCLProvider rs(1280, 720, 1280, 720, 30);
 
     cv::Mat intrinsicMat(3, 3, cv::DataType<double>::type); // Intrisic matrix
     intrinsicMat.at<double>(0, 0) = rs.get_intrinsic_matrix()->at(0).at(0);
@@ -67,10 +68,9 @@ try
     int ma_alpha_max = 100;
     cv::createTrackbar("Alpha (Averaging)", window_name, &ma_alpha_int, ma_alpha_max);
     float groundPlaneDistance = 1.0F;
-    Eigen::Vector4f groundPlaneCoefficients = {0.0,0.0,0.0,0.0};
+    Eigen::Vector4f groundPlaneCoefficients = {0.0, 0.0, 0.0, 0.0};
 
     cv::createButton("Tare", nullptr);
-
 
     while (cv::waitKey(1) < 0 && cv::getWindowProperty(window_name, cv::WND_PROP_AUTOSIZE) >= 0)
     {
@@ -80,7 +80,7 @@ try
         auto yuyv = rs.get_color_frame();
 
         // Create OpenCV matrix of size (w,h) from the color image
-        cv::Mat image_yuyv(cv::Size(rs.color_width, rs.color_height), CV_8UC2,(void*)yuyv->get_data(), cv::Mat::AUTO_STEP);
+        cv::Mat image_yuyv(cv::Size(rs.color_width, rs.color_height), CV_8UC2, (void *)yuyv->get_data(), cv::Mat::AUTO_STEP);
         cv::Mat image_bgr(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
         cv::cvtColor(image_yuyv, image_bgr, cv::COLOR_YUV2BGR_YUYV);
 
@@ -129,13 +129,13 @@ try
         {
             Eigen::VectorXf groundPlaneCoeffsRaw;
             groundPlaneRansac.getModelCoefficients(groundPlaneCoeffsRaw);
-            if ( groundPlaneCoeffsRaw.w() < 0 )
+            if (groundPlaneCoeffsRaw.w() < 0)
             {
                 groundPlaneCoeffsRaw = -groundPlaneCoeffsRaw;
             }
             float ma_alpha = (float)ma_alpha_int / 100.0F;
             Eigen::Vector4f s1 = groundPlaneCoeffsRaw.head<4>() * ma_alpha;
-            Eigen::Vector4f s2 = groundPlaneCoefficients * (1.0F-ma_alpha);
+            Eigen::Vector4f s2 = groundPlaneCoefficients * (1.0F - ma_alpha);
             groundPlaneCoefficients = s1 + s2;
             groundPlaneDistance = groundPlaneCoefficients.w();
 
@@ -159,12 +159,12 @@ try
             cv::projectPoints(points_cv, rs.rvec, rs.tvec, intrinsicMat, rs.distortion, projectedPoints);
 
             // color points in image
-            cv::Vec3b color(0, 255, 0);
-            for ( auto point : projectedPoints) 
+#pragma omp parallel for default(none) shared(image_bgr, projectedPoints)
+            for (auto point : projectedPoints)
             {
                 auto ix((unsigned int)std::round(point.x));
                 auto iy((unsigned int)std::round(point.y));
-                image_bgr.at<cv::Vec3b>(iy, ix) = color;
+                image_bgr.at<cv::Vec3b>(iy, ix) = cv::Vec3b (0, 255, 0);
             }
         }
 
