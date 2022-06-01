@@ -18,7 +18,7 @@
 int main(int argc, char **argv)
 try
 {
-    RealsensePCLProvider rs(1280, 720, 1280, 720, 30);
+    RealsensePCLProvider rs(1280, 720, 1280, 720, 30, RS2_FORMAT_BGR8);
 
     cv::Mat intrinsicMat(3, 3, cv::DataType<double>::type); // Intrisic matrix
     intrinsicMat.at<double>(0, 0) = rs.get_intrinsic_matrix()->at(0).at(0);
@@ -72,39 +72,57 @@ try
 
     cv::createButton("Tare", nullptr);
 
+    cv::Mat image_twochannel(cv::Size(rs.color_width, rs.color_height), CV_8UC2);
+    cv::Mat image_threechannel(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
+    cv::Mat image_bgr(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
+
     while (cv::waitKey(1) < 0 && cv::getWindowProperty(window_name, cv::WND_PROP_AUTOSIZE) >= 0)
     {
         auto t1 = std::chrono::high_resolution_clock::now();
         // wait for and get frames from Camera
         auto pcl_points = rs.get_pcl_point_cloud();
-        auto yuyv = rs.get_color_frame();
+        auto rs2_color_frame = rs.get_color_frame();
 
-        // Create OpenCV matrix of size (w,h) from the color image
-        cv::Mat image_yuyv(cv::Size(rs.color_width, rs.color_height), CV_8UC2, (void *)yuyv->get_data(), cv::Mat::AUTO_STEP);
-        cv::Mat image_bgr(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
-        cv::cvtColor(image_yuyv, image_bgr, cv::COLOR_YUV2BGR_YUYV);
+        if ( rs2_color_frame->get_profile().format() == RS2_FORMAT_YUYV )
+        {
+            image_twochannel.data = (uchar *)rs2_color_frame->get_data();
+            cv::cvtColor(image_twochannel, image_bgr, cv::COLOR_YUV2BGR_YUYV);
+        }
+        else if ( rs2_color_frame->get_profile().format() == RS2_FORMAT_BGR8 )
+        {
+            image_bgr.data = (uchar *)rs2_color_frame->get_data();
+        }
+        else if ( rs2_color_frame->get_profile().format() == RS2_FORMAT_RGB8 )
+        {
+            image_threechannel.data = (uchar *)rs2_color_frame->get_data();
+            cv::cvtColor(image_threechannel, image_bgr, cv::COLOR_RGB2BGR);
+        }
+        else
+        {
+            throw std::invalid_argument("Color format not supported");
+        }
 
         // filter point cloud by z distance
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PassThrough<pcl::PointXYZ> pass;
-        pass.setInputCloud(pcl_points);
-        pass.setFilterFieldName("z");
-        pass.setFilterLimits((float)min_distance / 100.0F, (float)max_distance / 100.0F);
-        pass.filter(*cloud_filtered);
+        pcl::PassThrough<pcl::PointXYZ> passz;
+        passz.setInputCloud(pcl_points);
+        passz.setFilterFieldName("z");
+        passz.setFilterLimits((float)min_distance / 100.0F, (float)max_distance / 100.0F);
+        passz.filter(*cloud_filtered);
 
         // filter point cloud by y distance
         pcl::PassThrough<pcl::PointXYZ> passy;
-        pass.setInputCloud(cloud_filtered);
-        pass.setFilterFieldName("y");
-        pass.setFilterLimits(0.5, 4.0);
-        pass.filter(*cloud_filtered);
+        passy.setInputCloud(cloud_filtered);
+        passy.setFilterFieldName("y");
+        passy.setFilterLimits(0.5, 4.0);
+        passy.filter(*cloud_filtered);
 
         // filter point cloud by x distance
         pcl::PassThrough<pcl::PointXYZ> passx;
-        pass.setInputCloud(cloud_filtered);
-        pass.setFilterFieldName("x");
-        pass.setFilterLimits(-(float)x_width / 200.0F, (float)x_width / 200.0F);
-        pass.filter(*cloud_filtered);
+        passx.setInputCloud(cloud_filtered);
+        passx.setFilterFieldName("x");
+        passx.setFilterLimits(-(float)x_width / 200.0F, (float)x_width / 200.0F);
+        passx.filter(*cloud_filtered);
 
         // downsample point cloud
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>);
@@ -133,6 +151,8 @@ try
             {
                 groundPlaneCoeffsRaw = -groundPlaneCoeffsRaw;
             }
+
+            // moving average of plane equation
             float ma_alpha = (float)ma_alpha_int / 100.0F;
             Eigen::Vector4f s1 = groundPlaneCoeffsRaw.head<4>() * ma_alpha;
             Eigen::Vector4f s2 = groundPlaneCoefficients * (1.0F - ma_alpha);
