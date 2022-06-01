@@ -76,6 +76,14 @@ try
     cv::Mat image_threechannel(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
     cv::Mat image_bgr(cv::Size(rs.color_width, rs.color_height), CV_8UC3);
 
+    // initialize PCL Filters
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PassThrough<pcl::PointXYZ> passz;
+    pcl::PassThrough<pcl::PointXYZ> passy;
+    pcl::PassThrough<pcl::PointXYZ> passx;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::VoxelGrid<pcl::PointXYZ> downsample;
+
     while (cv::waitKey(1) < 0 && cv::getWindowProperty(window_name, cv::WND_PROP_AUTOSIZE) >= 0)
     {
         auto t1 = std::chrono::high_resolution_clock::now();
@@ -104,30 +112,24 @@ try
         }
 
         // filter point cloud by z distance
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PassThrough<pcl::PointXYZ> passz;
         passz.setInputCloud(pcl_points);
         passz.setFilterFieldName("z");
         passz.setFilterLimits((float)min_distance / 100.0F, (float)max_distance / 100.0F);
         passz.filter(*cloud_filtered);
 
         // filter point cloud by y distance
-        pcl::PassThrough<pcl::PointXYZ> passy;
         passy.setInputCloud(cloud_filtered);
         passy.setFilterFieldName("y");
         passy.setFilterLimits(0.5, 4.0);
         passy.filter(*cloud_filtered);
 
         // filter point cloud by x distance
-        pcl::PassThrough<pcl::PointXYZ> passx;
         passx.setInputCloud(cloud_filtered);
         passx.setFilterFieldName("x");
         passx.setFilterLimits(-(float)x_width / 200.0F, (float)x_width / 200.0F);
         passx.filter(*cloud_filtered);
 
         // downsample point cloud
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::VoxelGrid<pcl::PointXYZ> downsample;
         downsample.setInputCloud(cloud_filtered);
         float voxel_size_f = (float)voxel_size / 100.0F;
         downsample.setLeafSize(voxel_size_f, voxel_size_f, voxel_size_f);
