@@ -83,6 +83,7 @@ try
         auto pcl_points = rs.get_pcl_point_cloud();
         auto rs2_color_frame = rs.get_color_frame();
 
+        // convert rs2 frame to OpenCV Mat
         if ( rs2_color_frame->get_profile().format() == RS2_FORMAT_YUYV )
         {
             image_twochannel.data = (uchar *)rs2_color_frame->get_data();
